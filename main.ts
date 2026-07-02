@@ -1,4 +1,5 @@
 import { configure, getConsoleSink } from "@logtape/logtape";
+import { createFederationInstance } from "./federation.ts";
 
 await configure({
   sinks: { console: getConsoleSink() },
@@ -24,5 +25,12 @@ export function handler(req: Request): Response {
 }
 
 if (import.meta.main) {
-  Deno.serve(handler);
+  const kv = await Deno.openKv();
+  const federation = createFederationInstance(kv);
+  Deno.serve((req) =>
+    federation.fetch(req, {
+      contextData: undefined,
+      onNotFound: () => Promise.resolve(handler(req)),
+    })
+  );
 }
