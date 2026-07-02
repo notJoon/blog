@@ -21,6 +21,26 @@ function apGet(path: string): Request {
   });
 }
 
+async function seedFollowers(kv: Deno.Kv, count: number) {
+  for (let i = 0; i < count; i++) {
+    const id = `https://remote.example/users/u${String(i).padStart(3, "0")}`;
+    await kv.set(["followers", USER, id], { id, inboxId: `${id}/inbox` });
+  }
+}
+
+async function getFollowersFirstPage(
+  federation: ReturnType<typeof createFederationInstance>,
+) {
+  const collection =
+    await (await federation.fetch(apGet("/users/me/followers"), {
+      contextData: undefined,
+    })).json();
+  const first = new URL(collection.first);
+  return await (await federation.fetch(apGet(first.pathname + first.search), {
+    contextData: undefined,
+  })).json();
+}
+
 Deno.test("actor dispatcher returns Person for /users/me", async () => {
   const { kv, federation } = await makeFederation();
   try {
@@ -121,14 +141,20 @@ Deno.test("Follow stores follower and replies with Accept", async () => {
       ["followers", USER, "https://remote.example/users/alice"],
     );
     assertExists(entry.value);
-    assertEquals(entry.value.inboxId, "https://remote.example/users/alice/inbox");
+    assertEquals(
+      entry.value.inboxId,
+      "https://remote.example/users/alice/inbox",
+    );
 
     assertEquals(sent.length, 1);
     const accept = sent[0].activity as Accept;
     assertInstanceOf(accept, Accept);
     assertEquals(accept.actorId?.href, "http://localhost:8000/users/me");
     assertEquals(accept.objectId?.href, "https://remote.example/follows/1");
-    assertEquals((sent[0].recipient as Person).id?.href, "https://remote.example/users/alice");
+    assertEquals(
+      (sent[0].recipient as Person).id?.href,
+      "https://remote.example/users/alice",
+    );
   } finally {
     kv.close();
   }
@@ -169,7 +195,11 @@ Deno.test("Undo(Follow) removes follower", async () => {
     });
     await handleUndo(fakeInboxCtx(sent), undo, kv);
 
-    const entry = await kv.get(["followers", USER, "https://remote.example/users/alice"]);
+    const entry = await kv.get([
+      "followers",
+      USER,
+      "https://remote.example/users/alice",
+    ]);
     assertEquals(entry.value, null);
   } finally {
     kv.close();
@@ -192,7 +222,11 @@ Deno.test("Undo(Follow) targeting another actor keeps follower", async () => {
     });
     await handleUndo(fakeInboxCtx(sent), undo, kv);
 
-    const entry = await kv.get(["followers", USER, "https://remote.example/users/alice"]);
+    const entry = await kv.get([
+      "followers",
+      USER,
+      "https://remote.example/users/alice",
+    ]);
     assertExists(entry.value);
   } finally {
     kv.close();
@@ -202,18 +236,9 @@ Deno.test("Undo(Follow) targeting another actor keeps follower", async () => {
 Deno.test("followers page of exactly PAGE_SIZE has no next", async () => {
   const { kv, federation } = await makeFederation();
   try {
-    for (let i = 0; i < FOLLOWERS_PAGE_SIZE; i++) {
-      const id = `https://remote.example/users/u${String(i).padStart(3, "0")}`;
-      await kv.set(["followers", USER, id], { id, inboxId: `${id}/inbox` });
-    }
+    await seedFollowers(kv, FOLLOWERS_PAGE_SIZE);
 
-    const collection = await (await federation.fetch(apGet("/users/me/followers"), {
-      contextData: undefined,
-    })).json();
-    const first = new URL(collection.first);
-    const page = await (await federation.fetch(apGet(first.pathname + first.search), {
-      contextData: undefined,
-    })).json();
+    const page = await getFollowersFirstPage(federation);
     assertEquals(page.orderedItems.length, FOLLOWERS_PAGE_SIZE);
     assertEquals(page.next, undefined);
   } finally {
@@ -224,29 +249,17 @@ Deno.test("followers page of exactly PAGE_SIZE has no next", async () => {
 Deno.test("followers collection lists stored followers with pagination", async () => {
   const { kv, federation } = await makeFederation();
   try {
-    const total = FOLLOWERS_PAGE_SIZE + 1;
-    for (let i = 0; i < total; i++) {
-      const id = `https://remote.example/users/u${String(i).padStart(3, "0")}`;
-      await kv.set(["followers", USER, id], { id, inboxId: `${id}/inbox` });
-    }
+    await seedFollowers(kv, FOLLOWERS_PAGE_SIZE + 1);
 
-    const res = await federation.fetch(apGet("/users/me/followers"), {
-      contextData: undefined,
-    });
-    assertEquals(res.status, 200);
-    const collection = await res.json();
-    assertExists(collection.first);
-
-    const page1 = await (await federation.fetch(apGet(new URL(collection.first).pathname + new URL(collection.first).search), {
-      contextData: undefined,
-    })).json();
+    const page1 = await getFollowersFirstPage(federation);
     assertEquals(page1.orderedItems.length, FOLLOWERS_PAGE_SIZE);
     assertExists(page1.next);
 
     const nextUrl = new URL(page1.next);
-    const page2 = await (await federation.fetch(apGet(nextUrl.pathname + nextUrl.search), {
-      contextData: undefined,
-    })).json();
+    const page2 =
+      await (await federation.fetch(apGet(nextUrl.pathname + nextUrl.search), {
+        contextData: undefined,
+      })).json();
     assertEquals([page2.orderedItems].flat().length, 1);
   } finally {
     kv.close();

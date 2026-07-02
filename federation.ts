@@ -38,10 +38,13 @@ export async function handleFollow(
   const follower = await follow.getActor(ctx);
   if (follower?.id == null || follower.inboxId == null) return;
   // ponytail: id + inbox only; store endpoints.sharedInbox when fan-out volume matters
-  await kv.set(["followers", USER, follower.id.href], {
-    id: follower.id.href,
-    inboxId: follower.inboxId.href,
-  } satisfies StoredFollower);
+  await kv.set(
+    ["followers", USER, follower.id.href],
+    {
+      id: follower.id.href,
+      inboxId: follower.inboxId.href,
+    } satisfies StoredFollower,
+  );
   await ctx.sendActivity(
     { identifier: USER },
     follower,
@@ -121,7 +124,7 @@ export function createFederationInstance(kv: Deno.Kv) {
     .on(Follow, (ctx, follow) => handleFollow(ctx, follow, kv))
     .on(Undo, (ctx, undo) => handleUndo(ctx, undo, kv));
 
-  // TODO: empty stubs so actor's outbox/followers URIs resolve
+  // TODO: empty outbox stub so actor's outbox URI resolves
   federation.setOutboxDispatcher(
     "/users/{identifier}/outbox",
     (_ctx, identifier) => {
