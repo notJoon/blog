@@ -1,11 +1,23 @@
 import { assertEquals, assertExists, assertInstanceOf } from "@std/assert";
-import type { InboxContext } from "@fedify/fedify";
-import { Accept, Follow, Person, Undo } from "@fedify/vocab";
+import type { Context, InboxContext } from "@fedify/fedify";
+import {
+  Accept,
+  Create,
+  Follow,
+  Note,
+  Person,
+  PUBLIC_COLLECTION,
+  Undo,
+} from "@fedify/vocab";
 import {
   createFederationInstance,
+  followerKey,
   FOLLOWERS_PAGE_SIZE,
+  followersPrefix,
   handleFollow,
   handleUndo,
+  postKey,
+  publishPost,
   USER,
 } from "./federation.ts";
 
@@ -24,7 +36,7 @@ function apGet(path: string): Request {
 async function seedFollowers(kv: Deno.Kv, count: number) {
   for (let i = 0; i < count; i++) {
     const id = `https://remote.example/users/u${String(i).padStart(3, "0")}`;
-    await kv.set(["followers", USER, id], { id, inboxId: `${id}/inbox` });
+    await kv.set(followerKey(id), { id, inboxId: `${id}/inbox` });
   }
 }
 
@@ -138,7 +150,7 @@ Deno.test("Follow stores follower and replies with Accept", async () => {
     await handleFollow(fakeInboxCtx(sent), makeFollow(), kv);
 
     const entry = await kv.get<{ id: string; inboxId: string }>(
-      ["followers", USER, "https://remote.example/users/alice"],
+      followerKey("https://remote.example/users/alice"),
     );
     assertExists(entry.value);
     assertEquals(
@@ -175,7 +187,7 @@ Deno.test("Follow targeting another actor is ignored", async () => {
     await handleFollow(fakeInboxCtx(sent), follow, kv);
 
     assertEquals(sent.length, 0);
-    const entries = await Array.fromAsync(kv.list({ prefix: ["followers"] }));
+    const entries = await Array.fromAsync(kv.list({ prefix: followersPrefix }));
     assertEquals(entries.length, 0);
   } finally {
     kv.close();
@@ -195,11 +207,9 @@ Deno.test("Undo(Follow) removes follower", async () => {
     });
     await handleUndo(fakeInboxCtx(sent), undo, kv);
 
-    const entry = await kv.get([
-      "followers",
-      USER,
-      "https://remote.example/users/alice",
-    ]);
+    const entry = await kv.get(
+      followerKey("https://remote.example/users/alice"),
+    );
     assertEquals(entry.value, null);
   } finally {
     kv.close();
@@ -222,11 +232,9 @@ Deno.test("Undo(Follow) targeting another actor keeps follower", async () => {
     });
     await handleUndo(fakeInboxCtx(sent), undo, kv);
 
-    const entry = await kv.get([
-      "followers",
-      USER,
-      "https://remote.example/users/alice",
-    ]);
+    const entry = await kv.get(
+      followerKey("https://remote.example/users/alice"),
+    );
     assertExists(entry.value);
   } finally {
     kv.close();
@@ -261,6 +269,107 @@ Deno.test("followers collection lists stored followers with pagination", async (
         contextData: undefined,
       })).json();
     assertEquals([page2.orderedItems].flat().length, 1);
+  } finally {
+    kv.close();
+  }
+});
+
+// ponytail: fake ctx with only the methods publishPost touches
+function fakePublishCtx(sent: Sent[]): Context<void> {
+  return {
+    getObjectUri: (_cls: unknown, values: { identifier: string; id: string }) =>
+      new URL(
+        `http://localhost:8000/users/${values.identifier}/notes/${values.id}`,
+      ),
+    getActorUri: (identifier: string) =>
+      new URL(`http://localhost:8000/users/${identifier}`),
+    getFollowersUri: (identifier: string) =>
+      new URL(`http://localhost:8000/users/${identifier}/followers`),
+    sendActivity: (_sender: unknown, recipient: unknown, activity: unknown) => {
+      sent.push({ recipient, activity });
+      return Promise.resolve();
+    },
+  } as unknown as Context<void>;
+}
+
+Deno.test("publishPost stores post and fans out Create(Note) to followers", async () => {
+  const kv = await Deno.openKv(":memory:");
+  try {
+    const sent: Sent[] = [];
+    const post = await publishPost(fakePublishCtx(sent), kv, "<p>hello</p>");
+
+    const entry = await kv.get<{ content: string }>(postKey(post.id));
+    assertExists(entry.value);
+    assertEquals(entry.value.content, "<p>hello</p>");
+
+    assertEquals(sent.length, 1);
+    assertEquals(sent[0].recipient, "followers");
+    const create = sent[0].activity as Create;
+    assertInstanceOf(create, Create);
+    assertEquals(create.actorId?.href, "http://localhost:8000/users/me");
+    assertEquals(
+      create.ccIds[0]?.href,
+      "http://localhost:8000/users/me/followers",
+    );
+
+    const note = await create.getObject(fakePublishCtx(sent));
+    assertInstanceOf(note, Note);
+    assertEquals(
+      note.id?.href,
+      `http://localhost:8000/users/me/notes/${post.id}`,
+    );
+    assertEquals(note.content, "<p>hello</p>");
+    assertEquals(note.attributionId?.href, "http://localhost:8000/users/me");
+    assertEquals(note.toIds[0]?.href, PUBLIC_COLLECTION.href);
+    assertEquals(
+      note.ccIds[0]?.href,
+      "http://localhost:8000/users/me/followers",
+    );
+    assertExists(note.published);
+  } finally {
+    kv.close();
+  }
+});
+
+Deno.test("object dispatcher serves stored Note at its URL", async () => {
+  const { kv, federation } = await makeFederation();
+  try {
+    await kv.set(postKey("abc"), {
+      id: "abc",
+      content: "<p>hi</p>",
+      published: "2026-07-03T00:00:00Z",
+    });
+
+    const res = await federation.fetch(apGet("/users/me/notes/abc"), {
+      contextData: undefined,
+    });
+    assertEquals(res.status, 200);
+    const note = await res.json();
+    assertEquals(note.type, "Note");
+    assertEquals(note.content, "<p>hi</p>");
+    assertEquals(note.attributedTo, "http://localhost:8000/users/me");
+    assertExists(note.published);
+    // JSON-LD compaction may shorten the Public collection IRI to "as:Public"
+    assertEquals(
+      [note.to].flat().some((t: string) =>
+        t === PUBLIC_COLLECTION.href || t === "as:Public"
+      ),
+      true,
+    );
+    assertEquals(note.cc, "http://localhost:8000/users/me/followers");
+  } finally {
+    kv.close();
+  }
+});
+
+Deno.test("object dispatcher returns 404 for missing note", async () => {
+  const { kv, federation } = await makeFederation();
+  try {
+    const res = await federation.fetch(apGet("/users/me/notes/nope"), {
+      contextData: undefined,
+    });
+    assertEquals(res.status, 404);
+    await res.body?.cancel();
   } finally {
     kv.close();
   }

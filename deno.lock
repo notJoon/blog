@@ -2,10 +2,12 @@
   "version": "5",
   "specifiers": {
     "jsr:@fedify/fedify@^2.3.1": "2.3.1",
+    "jsr:@fedify/hono@^2.3.1": "2.3.1",
     "jsr:@fedify/uri-template@^2.3.1": "2.3.1",
     "jsr:@fedify/vocab-runtime@^2.3.1": "2.3.1",
     "jsr:@fedify/vocab@^2.3.1": "2.3.1",
     "jsr:@fedify/webfinger@^2.3.1": "2.3.1",
+    "jsr:@hono/hono@^4.12.27": "4.12.27",
     "jsr:@logtape/logtape@^2.2.0": "2.2.2",
     "jsr:@logtape/logtape@^2.2.2": "2.2.2",
     "jsr:@std/assert@1": "1.0.19",
@@ -41,6 +43,12 @@
         "npm:structured-field-values"
       ]
     },
+    "@fedify/hono@2.3.1": {
+      "integrity": "054ca829cd8c3e45b332881911fe5a80f5e8d4760b3ce2f8cf7df2d65bfd9d6f",
+      "dependencies": [
+        "jsr:@fedify/fedify"
+      ]
+    },
     "@fedify/uri-template@2.3.1": {
       "integrity": "a9786bf204e65a99ee229fc6a06aefdc7b2b441c425099fc225909958d3bcd67"
     },
@@ -73,6 +81,9 @@
         "jsr:@logtape/logtape@^2.2.0",
         "npm:@opentelemetry/api"
       ]
+    },
+    "@hono/hono@4.12.27": {
+      "integrity": "3acc640592008e43f7048e8e53275203e0da84fbcd50201121195da7560583dc"
     },
     "@logtape/logtape@2.2.2": {
       "integrity": "cd588b690ed7d401b9913f54fc39ff5faa955483f14d79c115f487a5a656955e"

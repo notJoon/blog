@@ -6,8 +6,17 @@ import {
   InProcessMessageQueue,
   MemoryKvStore,
 } from "@fedify/fedify";
-import type { InboxContext } from "@fedify/fedify";
-import { Accept, Endpoints, Follow, Person, Undo } from "@fedify/vocab";
+import type { Context, InboxContext } from "@fedify/fedify";
+import {
+  Accept,
+  Create,
+  Endpoints,
+  Follow,
+  Note,
+  Person,
+  PUBLIC_COLLECTION,
+  Undo,
+} from "@fedify/vocab";
 import type { Recipient } from "@fedify/vocab";
 
 // TODO: single-user blog, hardcoded identifier
@@ -25,7 +34,58 @@ interface StoredFollower {
   inboxId: string;
 }
 
+export interface StoredPost {
+  id: string;
+  content: string;
+  published: string; // ISO instant
+}
+
+export const postsPrefix = ["posts", USER] as const;
+export const postKey = (id: string) => [...postsPrefix, id] as const;
+export const followersPrefix = ["followers", USER] as const;
+export const followerKey = (id: string) => [...followersPrefix, id] as const;
+
 const KEY_TYPES = ["RSASSA-PKCS1-v1_5", "Ed25519"] as const;
+
+function buildNote(ctx: Context<void>, post: StoredPost): Note {
+  return new Note({
+    id: ctx.getObjectUri(Note, { identifier: USER, id: post.id }),
+    attribution: ctx.getActorUri(USER),
+    content: post.content,
+    // public post addressing: to Public, cc followers
+    to: PUBLIC_COLLECTION,
+    cc: ctx.getFollowersUri(USER),
+    published: Temporal.Instant.from(post.published),
+  });
+}
+
+export async function publishPost(
+  ctx: Context<void>,
+  kv: Deno.Kv,
+  content: string,
+): Promise<StoredPost> {
+  const post: StoredPost = {
+    id: crypto.randomUUID(),
+    content,
+    published: Temporal.Now.instant().toString(),
+  };
+  // ponytail: keyed by uuid, list order lost; sort in memory at Phase 4 (single-user volume)
+  await kv.set(postKey(post.id), post);
+  const note = buildNote(ctx, post);
+  // "followers" → Fedify resolves the followers collection and handles queue/retry
+  await ctx.sendActivity(
+    { identifier: USER },
+    "followers",
+    new Create({
+      id: new URL(`${note.id!.href}#create`),
+      actor: ctx.getActorUri(USER),
+      object: note,
+      to: PUBLIC_COLLECTION,
+      cc: ctx.getFollowersUri(USER),
+    }),
+  );
+  return post;
+}
 
 export async function handleFollow(
   ctx: InboxContext<void>,
@@ -39,7 +99,7 @@ export async function handleFollow(
   if (follower?.id == null || follower.inboxId == null) return;
   // ponytail: id + inbox only; store endpoints.sharedInbox when fan-out volume matters
   await kv.set(
-    ["followers", USER, follower.id.href],
+    followerKey(follower.id.href),
     {
       id: follower.id.href,
       inboxId: follower.inboxId.href,
@@ -65,7 +125,7 @@ export async function handleUndo(
   // signature verification upstream guarantees undo.actorId is the sender;
   // the inner Follow's actor must be that same sender
   if (object.actorId?.href !== undo.actorId.href) return;
-  await kv.delete(["followers", USER, undo.actorId.href]);
+  await kv.delete(followerKey(undo.actorId.href));
 }
 
 export function createFederationInstance(kv: Deno.Kv) {
@@ -133,13 +193,24 @@ export function createFederationInstance(kv: Deno.Kv) {
     },
   );
 
+  federation.setObjectDispatcher(
+    Note,
+    "/users/{identifier}/notes/{id}",
+    async (ctx, values) => {
+      if (values.identifier !== USER) return null;
+      const post = (await kv.get<StoredPost>(postKey(values.id))).value;
+      if (post == null) return null;
+      return buildNote(ctx, post);
+    },
+  );
+
   federation
     .setFollowersDispatcher(
       "/users/{identifier}/followers",
       async (_ctx, identifier, cursor) => {
         if (identifier !== USER) return null;
         // limit+1 probe: only emit nextCursor when a following item really exists
-        const iter = kv.list<StoredFollower>({ prefix: ["followers", USER] }, {
+        const iter = kv.list<StoredFollower>({ prefix: followersPrefix }, {
           limit: FOLLOWERS_PAGE_SIZE + 1,
           cursor: cursor || undefined,
         });
