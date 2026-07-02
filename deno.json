@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "dev": "deno run --watch --allow-net --allow-read --allow-write --allow-env main.ts"
+  },
+  "unstable": ["kv", "temporal"],
+  "imports": {
+    "@fedify/fedify": "jsr:@fedify/fedify@^2.3.1",
+    "@fedify/hono": "jsr:@fedify/hono@^2.3.1",
+    "@hono/hono": "jsr:@hono/hono@^4.12.27",
+    "@logtape/logtape": "jsr:@logtape/logtape@^2.2.2",
+    "@std/assert": "jsr:@std/assert@1"
+  }
+}
