@@ -46,6 +46,48 @@ export const followersPrefix = ["followers", USER] as const;
 export const followerKey = (id: string) => [...followersPrefix, id] as const;
 
 const KEY_TYPES = ["RSASSA-PKCS1-v1_5", "Ed25519"] as const;
+type KeyType = typeof KEY_TYPES[number];
+
+function isUserActor(ctx: InboxContext<void>, uri: URL | null): boolean {
+  const parsed = ctx.parseUri(uri);
+  return parsed?.type === "actor" && parsed.identifier === USER;
+}
+
+async function generateStoredKeyPair(type: KeyType): Promise<StoredKeyPair> {
+  const { privateKey, publicKey } = await generateCryptoKeyPair(type);
+  return {
+    privateKey: await exportJwk(privateKey),
+    publicKey: await exportJwk(publicKey),
+  };
+}
+
+async function getStoredKeyPairs(
+  kv: Deno.Kv,
+  identifier: string,
+): Promise<StoredKeyPair[]> {
+  const key = ["keys", identifier] as const;
+  const entry = await kv.get<StoredKeyPair[]>(key);
+  if (entry.value != null) return entry.value;
+
+  const generated = await Promise.all(KEY_TYPES.map(generateStoredKeyPair));
+  // atomic w/ versionstamp check: concurrent first fetches must agree on one key set
+  const res = await kv.atomic().check(entry).set(key, generated).commit();
+  return res.ok ? generated : (await kv.get<StoredKeyPair[]>(key)).value!;
+}
+
+async function importStoredKeyPair(pair: StoredKeyPair) {
+  return {
+    privateKey: await importJwk(pair.privateKey, "private"),
+    publicKey: await importJwk(pair.publicKey, "public"),
+  };
+}
+
+function toRecipient(follower: StoredFollower): Recipient {
+  return {
+    id: new URL(follower.id),
+    inboxId: new URL(follower.inboxId),
+  };
+}
 
 function buildNote(ctx: Context<void>, post: StoredPost): Note {
   return new Note({
@@ -93,15 +135,17 @@ export async function handleFollow(
   kv: Deno.Kv,
 ) {
   if (follow.id == null || follow.objectId == null) return;
-  const parsed = ctx.parseUri(follow.objectId);
-  if (parsed?.type !== "actor" || parsed.identifier !== USER) return;
+  if (!isUserActor(ctx, follow.objectId)) return;
   const follower = await follow.getActor(ctx);
   if (follower?.id == null || follower.inboxId == null) return;
   // ponytail: id + inbox only; store endpoints.sharedInbox when fan-out volume matters
-  await kv.set(followerKey(follower.id.href), {
-    id: follower.id.href,
-    inboxId: follower.inboxId.href,
-  } satisfies StoredFollower);
+  await kv.set(
+    followerKey(follower.id.href),
+    {
+      id: follower.id.href,
+      inboxId: follower.inboxId.href,
+    } satisfies StoredFollower,
+  );
   await ctx.sendActivity(
     { identifier: USER },
     follower,
@@ -117,8 +161,7 @@ export async function handleUndo(
   const object = await undo.getObject(ctx);
   if (!(object instanceof Follow)) return;
   if (undo.actorId == null) return;
-  const parsed = ctx.parseUri(object.objectId);
-  if (parsed?.type !== "actor" || parsed.identifier !== USER) return;
+  if (!isUserActor(ctx, object.objectId)) return;
   // signature verification upstream guarantees undo.actorId is the sender;
   // the inner Follow's actor must be that same sender
   if (object.actorId?.href !== undo.actorId.href) return;
@@ -150,33 +193,9 @@ export function createFederationInstance(kv: Deno.Kv) {
     })
     .setKeyPairsDispatcher(async (_ctx, identifier) => {
       if (identifier !== USER) return [];
-      const entry = await kv.get<StoredKeyPair[]>(["keys", identifier]);
-      let stored = entry.value;
-      if (stored == null) {
-        const generated: StoredKeyPair[] = [];
-        for (const type of KEY_TYPES) {
-          const { privateKey, publicKey } = await generateCryptoKeyPair(type);
-          generated.push({
-            privateKey: await exportJwk(privateKey),
-            publicKey: await exportJwk(publicKey),
-          });
-        }
-        // atomic w/ versionstamp check: concurrent first fetches must agree on one key set
-        const res = await kv
-          .atomic()
-          .check(entry)
-          .set(["keys", identifier], generated)
-          .commit();
-        stored = res.ok
-          ? generated
-          : (await kv.get<StoredKeyPair[]>(["keys", identifier])).value!;
-      }
-      return Promise.all(
-        stored.map(async (pair) => ({
-          privateKey: await importJwk(pair.privateKey, "private"),
-          publicKey: await importJwk(pair.publicKey, "public"),
-        })),
-      );
+      return Promise.all((await getStoredKeyPairs(kv, identifier)).map(
+        importStoredKeyPair,
+      ));
     });
 
   federation
@@ -225,10 +244,7 @@ export function createFederationInstance(kv: Deno.Kv) {
             nextCursor = pageCursor;
             break;
           }
-          items.push({
-            id: new URL(entry.value.id),
-            inboxId: new URL(entry.value.inboxId),
-          });
+          items.push(toRecipient(entry.value));
           pageCursor = iter.cursor;
         }
         return { items, nextCursor };
