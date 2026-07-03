@@ -2,6 +2,7 @@ import { Hono } from "@hono/hono";
 import { html, raw } from "@hono/hono/html";
 import { bearerAuth } from "@hono/hono/bearer-auth";
 import { federation } from "@fedify/hono";
+import { behindProxy } from "@hongminhee/x-forwarded-fetch";
 import { configure, getConsoleSink } from "@logtape/logtape";
 import {
   createFederationInstance,
@@ -33,7 +34,8 @@ async function listPosts(kv: Deno.Kv): Promise<StoredPost[]> {
     kv.list<StoredPost>({ prefix: postsPrefix }),
   );
   // ponytail: in-memory sort; paginate when post count actually hurts
-  return entries.map((e) => e.value)
+  return entries
+    .map((e) => e.value)
     .sort((a, b) => b.published.localeCompare(a.published));
 }
 
@@ -42,10 +44,12 @@ function page(title: string, body: Html): Html {
     <!doctype html>
     <html>
       <head>
-        <meta charset="utf-8">
+        <meta charset="utf-8" />
         <title>${title}</title>
       </head>
-      <body>${body}</body>
+      <body>
+        ${body}
+      </body>
     </html>
   `;
 }
@@ -53,9 +57,9 @@ function page(title: string, body: Html): Html {
 // post content is owner-authored HTML → rendered raw on purpose
 function article(post: StoredPost): Html {
   return html`<article>
-  <a href="/users/${USER}/notes/${post.id}"><time>${post.published}</time></a>
-  ${raw(post.content)}
-</article>`;
+    <a href="/users/${USER}/notes/${post.id}"><time>${post.published}</time></a>
+    ${raw(post.content)}
+  </article>`;
 }
 
 export function createApp(kv: Deno.Kv, publishToken?: string) {
@@ -67,29 +71,35 @@ export function createApp(kv: Deno.Kv, publishToken?: string) {
 
   app.get("/", async (c) => {
     const posts = await listPosts(kv);
-    return c.html(page(
-      "Lee ByeongJun",
-      html`<h1>Lee ByeongJun</h1>
-<p><a href="/users/${USER}">@${USER}@${new URL(c.req.url).host}</a></p>
-${posts.map(article)}`,
-    ));
+    return c.html(
+      page(
+        "Deeeeeemo",
+        html`<h1>Deeeeeemo</h1>
+          <p>
+            <a href="/users/${USER}">@${USER}@${new URL(c.req.url).host}</a>
+          </p>
+          ${posts.map(article)}`,
+      ),
+    );
   });
 
   app.get("/users/:identifier", (c) => {
     if (c.req.param("identifier") !== USER) return c.notFound();
-    return c.html(page(
-      "Lee ByeongJun",
-      html`<h1>Lee ByeongJun</h1>
-<p>@${USER}@${new URL(c.req.url).host}</p>
-<p><a href="/">글 목록</a></p>`,
-    ));
+    return c.html(
+      page(
+        "Deeeeeemo",
+        html`<h1>Deeeeeemo</h1>
+          <p>@${USER}@${new URL(c.req.url).host}</p>
+          <p><a href="/">글 목록</a></p>`,
+      ),
+    );
   });
 
   app.get("/users/:identifier/notes/:id", async (c) => {
     if (c.req.param("identifier") !== USER) return c.notFound();
     const post = (await kv.get<StoredPost>(postKey(c.req.param("id")))).value;
     if (post == null) return c.notFound();
-    return c.html(page("Lee ByeongJun", article(post)));
+    return c.html(page("Deeeeeemo", article(post)));
   });
 
   // ponytail: endpoint only exists when a token is configured — no token, no publish
@@ -113,5 +123,6 @@ if (import.meta.main) {
   await configureLogging();
   const kv = await Deno.openKv();
   const app = createApp(kv, Deno.env.get("PUBLISH_TOKEN"));
-  Deno.serve(app.fetch);
+  // tunnels/reverse proxies terminate TLS; restore scheme+host from X-Forwarded-* headers
+  Deno.serve(behindProxy(app.fetch));
 }

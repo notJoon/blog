@@ -45,26 +45,29 @@ Deno.test("GET /users/me serves HTML profile to browsers", async () => {
     assertEquals(res.status, 200);
     assertEquals(res.headers.get("content-type")?.includes("text/html"), true);
     const body = await res.text();
-    assertEquals(body.includes("Lee ByeongJun"), true);
+    assertEquals(body.includes("Deeeeeemo"), true);
   } finally {
     kv.close();
   }
 });
 
-Deno.test("GET /users/me still serves ActivityPub JSON via content negotiation", async () => {
-  const { kv, app } = await makeApp();
-  try {
-    const res = await app.request("/users/me", {
-      headers: { accept: "application/activity+json" },
-    });
-    assertEquals(res.status, 200);
-    const actor = await res.json();
-    assertEquals(actor.type, "Person");
-    assertEquals(actor.preferredUsername, "me");
-  } finally {
-    kv.close();
-  }
-});
+Deno.test(
+  "GET /users/me still serves ActivityPub JSON via content negotiation",
+  async () => {
+    const { kv, app } = await makeApp();
+    try {
+      const res = await app.request("/users/me", {
+        headers: { accept: "application/activity+json" },
+      });
+      assertEquals(res.status, 200);
+      const actor = await res.json();
+      assertEquals(actor.type, "Person");
+      assertEquals(actor.preferredUsername, "me");
+    } finally {
+      kv.close();
+    }
+  },
+);
 
 Deno.test("GET /users/me/notes/:id renders post HTML", async () => {
   const { kv, app } = await makeApp();
@@ -109,24 +112,27 @@ Deno.test("POST /publish rejects missing or wrong token", async () => {
   }
 });
 
-Deno.test("POST /publish with token stores post and redirects to it", async () => {
-  const { kv, app } = await makeApp();
-  try {
-    const res = await app.request("/publish", {
-      method: "POST",
-      headers: { authorization: `Bearer ${TOKEN}` },
-      body: new URLSearchParams({ content: "<p>posted</p>" }),
-    });
-    assertEquals(res.status, 302);
-    const location = res.headers.get("location");
-    assertExists(location);
-    const id = location.split("/").pop()!;
-    const entry = await kv.get<{ content: string }>(postKey(id));
-    assertEquals(entry.value?.content, "<p>posted</p>");
-  } finally {
-    kv.close();
-  }
-});
+Deno.test(
+  "POST /publish with token stores post and redirects to it",
+  async () => {
+    const { kv, app } = await makeApp();
+    try {
+      const res = await app.request("/publish", {
+        method: "POST",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        body: new URLSearchParams({ content: "<p>posted</p>" }),
+      });
+      assertEquals(res.status, 302);
+      const location = res.headers.get("location");
+      assertExists(location);
+      const id = location.split("/").pop()!;
+      const entry = await kv.get<{ content: string }>(postKey(id));
+      assertEquals(entry.value?.content, "<p>posted</p>");
+    } finally {
+      kv.close();
+    }
+  },
+);
 
 Deno.test("publish endpoint is absent without a token", async () => {
   const kv = await Deno.openKv(":memory:");

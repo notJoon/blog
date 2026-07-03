@@ -98,13 +98,10 @@ export async function handleFollow(
   const follower = await follow.getActor(ctx);
   if (follower?.id == null || follower.inboxId == null) return;
   // ponytail: id + inbox only; store endpoints.sharedInbox when fan-out volume matters
-  await kv.set(
-    followerKey(follower.id.href),
-    {
-      id: follower.id.href,
-      inboxId: follower.inboxId.href,
-    } satisfies StoredFollower,
-  );
+  await kv.set(followerKey(follower.id.href), {
+    id: follower.id.href,
+    inboxId: follower.inboxId.href,
+  } satisfies StoredFollower);
   await ctx.sendActivity(
     { identifier: USER },
     follower,
@@ -142,7 +139,7 @@ export function createFederationInstance(kv: Deno.Kv) {
       return new Person({
         id: ctx.getActorUri(identifier),
         preferredUsername: identifier,
-        name: "Lee ByeongJun",
+        name: "Deeeeeemo",
         inbox: ctx.getInboxUri(identifier),
         outbox: ctx.getOutboxUri(identifier),
         followers: ctx.getFollowersUri(identifier),
@@ -165,7 +162,8 @@ export function createFederationInstance(kv: Deno.Kv) {
           });
         }
         // atomic w/ versionstamp check: concurrent first fetches must agree on one key set
-        const res = await kv.atomic()
+        const res = await kv
+          .atomic()
           .check(entry)
           .set(["keys", identifier], generated)
           .commit();
@@ -173,10 +171,12 @@ export function createFederationInstance(kv: Deno.Kv) {
           ? generated
           : (await kv.get<StoredKeyPair[]>(["keys", identifier])).value!;
       }
-      return Promise.all(stored.map(async (pair) => ({
-        privateKey: await importJwk(pair.privateKey, "private"),
-        publicKey: await importJwk(pair.publicKey, "public"),
-      })));
+      return Promise.all(
+        stored.map(async (pair) => ({
+          privateKey: await importJwk(pair.privateKey, "private"),
+          publicKey: await importJwk(pair.publicKey, "public"),
+        })),
+      );
     });
 
   federation
@@ -210,10 +210,13 @@ export function createFederationInstance(kv: Deno.Kv) {
       async (_ctx, identifier, cursor) => {
         if (identifier !== USER) return null;
         // limit+1 probe: only emit nextCursor when a following item really exists
-        const iter = kv.list<StoredFollower>({ prefix: followersPrefix }, {
-          limit: FOLLOWERS_PAGE_SIZE + 1,
-          cursor: cursor || undefined,
-        });
+        const iter = kv.list<StoredFollower>(
+          { prefix: followersPrefix },
+          {
+            limit: FOLLOWERS_PAGE_SIZE + 1,
+            cursor: cursor || undefined,
+          },
+        );
         const items: Recipient[] = [];
         let nextCursor: string | null = null;
         let pageCursor = "";
@@ -231,7 +234,7 @@ export function createFederationInstance(kv: Deno.Kv) {
         return { items, nextCursor };
       },
     )
-    .setFirstCursor((_ctx, identifier) => identifier === USER ? "" : null);
+    .setFirstCursor((_ctx, identifier) => (identifier === USER ? "" : null));
 
   return federation;
 }
