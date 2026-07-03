@@ -33,7 +33,6 @@ async function listPosts(kv: Deno.Kv): Promise<StoredPost[]> {
   const entries = await Array.fromAsync(
     kv.list<StoredPost>({ prefix: postsPrefix }),
   );
-  // ponytail: in-memory sort; paginate when post count actually hurts
   return entries
     .map((e) => e.value)
     .sort((a, b) => b.published.localeCompare(a.published));
@@ -102,7 +101,6 @@ export function createApp(kv: Deno.Kv, publishToken?: string) {
     return c.html(page("Deeeeeemo", article(post)));
   });
 
-  // ponytail: endpoint only exists when a token is configured — no token, no publish
   if (publishToken) {
     app.post("/publish", bearerAuth({ token: publishToken }), async (c) => {
       const body = await c.req.parseBody();

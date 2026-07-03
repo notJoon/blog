@@ -116,7 +116,6 @@ interface Sent {
   activity: unknown;
 }
 
-// ponytail: fake ctx with only the two methods the handlers touch
 function fakeInboxCtx(sent: Sent[]): InboxContext<void> {
   return {
     parseUri: (uri: URL | null) =>
@@ -274,7 +273,6 @@ Deno.test("followers collection lists stored followers with pagination", async (
   }
 });
 
-// ponytail: fake ctx with only the methods publishPost touches
 function fakePublishCtx(sent: Sent[]): Context<void> {
   return {
     getObjectUri: (_cls: unknown, values: { identifier: string; id: string }) =>
@@ -370,6 +368,29 @@ Deno.test("object dispatcher returns 404 for missing note", async () => {
     });
     assertEquals(res.status, 404);
     await res.body?.cancel();
+  } finally {
+    kv.close();
+  }
+});
+
+Deno.test("outbox lists Create activities for stored posts", async () => {
+  const { kv, federation } = await makeFederation();
+  try {
+    await kv.set(postKey("abc"), {
+      id: "abc",
+      content: "<p>hi</p>",
+      published: "2026-07-03T00:00:00Z",
+    });
+
+    const res = await federation.fetch(apGet("/users/me/outbox"), {
+      contextData: undefined,
+    });
+    assertEquals(res.status, 200);
+    const outbox = await res.json();
+    const items = [outbox.orderedItems].flat();
+    assertEquals(items.length, 1);
+    assertEquals(items[0].type, "Create");
+    assertEquals(items[0].object.content, "<p>hi</p>");
   } finally {
     kv.close();
   }

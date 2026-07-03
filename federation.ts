@@ -3,9 +3,8 @@ import {
   exportJwk,
   generateCryptoKeyPair,
   importJwk,
-  InProcessMessageQueue,
-  MemoryKvStore,
 } from "@fedify/fedify";
+import { DenoKvMessageQueue, DenoKvStore } from "@fedify/denokv";
 import type { Context, InboxContext } from "@fedify/fedify";
 import {
   Accept,
@@ -19,7 +18,7 @@ import {
 } from "@fedify/vocab";
 import type { Recipient } from "@fedify/vocab";
 
-// TODO: single-user blog, hardcoded identifier
+// single-user blog: the one and only actor
 export const USER = "me";
 
 export const FOLLOWERS_PAGE_SIZE = 50;
@@ -101,6 +100,17 @@ function buildNote(ctx: Context<void>, post: StoredPost): Note {
   });
 }
 
+function buildCreate(ctx: Context<void>, post: StoredPost): Create {
+  const note = buildNote(ctx, post);
+  return new Create({
+    id: new URL(`${note.id!.href}#create`),
+    actor: ctx.getActorUri(USER),
+    object: note,
+    to: PUBLIC_COLLECTION,
+    cc: ctx.getFollowersUri(USER),
+  });
+}
+
 export async function publishPost(
   ctx: Context<void>,
   kv: Deno.Kv,
@@ -111,20 +121,12 @@ export async function publishPost(
     content,
     published: Temporal.Now.instant().toString(),
   };
-  // ponytail: keyed by uuid, list order lost; sort in memory at Phase 4 (single-user volume)
   await kv.set(postKey(post.id), post);
-  const note = buildNote(ctx, post);
   // "followers" → Fedify resolves the followers collection and handles queue/retry
   await ctx.sendActivity(
     { identifier: USER },
     "followers",
-    new Create({
-      id: new URL(`${note.id!.href}#create`),
-      actor: ctx.getActorUri(USER),
-      object: note,
-      to: PUBLIC_COLLECTION,
-      cc: ctx.getFollowersUri(USER),
-    }),
+    buildCreate(ctx, post),
   );
   return post;
 }
@@ -138,7 +140,6 @@ export async function handleFollow(
   if (!isUserActor(ctx, follow.objectId)) return;
   const follower = await follow.getActor(ctx);
   if (follower?.id == null || follower.inboxId == null) return;
-  // ponytail: id + inbox only; store endpoints.sharedInbox when fan-out volume matters
   await kv.set(
     followerKey(follower.id.href),
     {
@@ -170,9 +171,8 @@ export async function handleUndo(
 
 export function createFederationInstance(kv: Deno.Kv) {
   const federation = createFederation<void>({
-    // TODO: dev stores. swap to @fedify/denokv DenoKvStore/DenoKvMessageQueue at deploy (Phase 6)
-    kv: new MemoryKvStore(),
-    queue: new InProcessMessageQueue(),
+    kv: new DenoKvStore(kv),
+    queue: new DenoKvMessageQueue(kv),
   });
 
   federation
@@ -203,12 +203,18 @@ export function createFederationInstance(kv: Deno.Kv) {
     .on(Follow, (ctx, follow) => handleFollow(ctx, follow, kv))
     .on(Undo, (ctx, undo) => handleUndo(ctx, undo, kv));
 
-  // TODO: empty outbox stub so actor's outbox URI resolves
   federation.setOutboxDispatcher(
     "/users/{identifier}/outbox",
-    (_ctx, identifier) => {
+    async (ctx, identifier) => {
       if (identifier !== USER) return null;
-      return { items: [] };
+      const entries = await Array.fromAsync(
+        kv.list<StoredPost>({ prefix: postsPrefix }),
+      );
+      const items = entries
+        .map((e) => e.value)
+        .sort((a, b) => b.published.localeCompare(a.published))
+        .map((post) => buildCreate(ctx, post));
+      return { items };
     },
   );
 

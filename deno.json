@@ -4,6 +4,7 @@
   },
   "unstable": ["kv", "temporal"],
   "imports": {
+    "@fedify/denokv": "jsr:@fedify/denokv@^2.3.1",
     "@fedify/fedify": "jsr:@fedify/fedify@^2.3.1",
     "@fedify/hono": "jsr:@fedify/hono@^2.3.1",
     "@fedify/vocab": "jsr:@fedify/vocab@^2.3.1",

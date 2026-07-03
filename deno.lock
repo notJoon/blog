@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@fedify/denokv@^2.3.1": "2.3.1",
     "jsr:@fedify/fedify@^2.3.1": "2.3.1",
     "jsr:@fedify/hono@^2.3.1": "2.3.1",
     "jsr:@fedify/uri-template@^2.3.1": "2.3.1",
@@ -28,6 +29,13 @@
     "npm:structured-field-values@^2.0.4": "2.0.4"
   },
   "jsr": {
+    "@fedify/denokv@2.3.1": {
+      "integrity": "cfb2b7238fb50499b38efa673559ef44d4c00c52e6328c7f07fb01f1201b094d",
+      "dependencies": [
+        "jsr:@fedify/fedify",
+        "npm:es-toolkit"
+      ]
+    },
     "@fedify/fedify@2.3.1": {
       "integrity": "deeeaadb1700e8a8ec5474d933615a03c5de5337f47bdc474af4372dcfa28de0",
       "dependencies": [
@@ -259,6 +267,7 @@
   },
   "workspace": {
     "dependencies": [
+      "jsr:@fedify/denokv@^2.3.1",
       "jsr:@fedify/fedify@^2.3.1",
       "jsr:@fedify/hono@^2.3.1",
       "jsr:@fedify/vocab@^2.3.1",
