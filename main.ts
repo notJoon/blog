@@ -61,8 +61,15 @@ function article(post: StoredPost): Html {
   </article>`;
 }
 
-export function createApp(kv: Deno.Kv, publishToken?: string) {
-  const fed = createFederationInstance(kv);
+export function createApp(
+  kv: Deno.Kv,
+  publishToken?: string,
+  origin?: Parameters<typeof createFederationInstance>[1],
+) {
+  const fed = createFederationInstance(kv, origin);
+  // the human-facing handle uses the WebFinger host, not the AP server host
+  const handleHost = typeof origin === "object" ? origin.handleHost : undefined;
+  const host = (url: string) => handleHost ?? new URL(url).host;
   const app = new Hono();
 
   // content negotiation: activity+json → Fedify, otherwise falls through to routes below
@@ -75,7 +82,7 @@ export function createApp(kv: Deno.Kv, publishToken?: string) {
         "Deeeeeemo",
         html`<h1>Deeeeeemo</h1>
           <p>
-            <a href="/users/${USER}">@${USER}@${new URL(c.req.url).host}</a>
+            <a href="/users/${USER}">@${USER}@${host(c.req.url)}</a>
           </p>
           ${posts.map(article)}`,
       ),
@@ -88,7 +95,7 @@ export function createApp(kv: Deno.Kv, publishToken?: string) {
       page(
         "Deeeeeemo",
         html`<h1>Deeeeeemo</h1>
-          <p>@${USER}@${new URL(c.req.url).host}</p>
+          <p>@${USER}@${host(c.req.url)}</p>
           <p><a href="/">글 목록</a></p>`,
       ),
     );
@@ -119,8 +126,27 @@ export function createApp(kv: Deno.Kv, publishToken?: string) {
 
 if (import.meta.main) {
   await configureLogging();
+
   const kv = await Deno.openKv();
-  const app = createApp(kv, Deno.env.get("PUBLISH_TOKEN"));
-  // tunnels/reverse proxies terminate TLS; restore scheme+host from X-Forwarded-* headers
+
+  // Example:
+  //   HANDLE_HOST=example.org WEB_ORIGIN=https://ap.example.org
+  //
+  // This serves the public handle as @me@example.org while hosting the
+  // ActivityPub server at https://ap.example.org.
+  //
+  // WEB_ORIGIN by itself fixes the server origin to a single host.
+  // Leaving both values unset uses the local development defaults.
+  const handleHost = Deno.env.get("HANDLE_HOST");
+  const webOrigin = Deno.env.get("WEB_ORIGIN");
+
+  const origin = handleHost && webOrigin
+    ? { handleHost, webOrigin }
+    : webOrigin;
+
+  const app = createApp(kv, Deno.env.get("PUBLISH_TOKEN"), origin);
+
+  // TLS is often terminated by tunnels or reverse proxies.
+  // Use X-Forwarded-* headers to recover the original scheme and host.
   Deno.serve(behindProxy(app.fetch));
 }

@@ -5,7 +5,7 @@ import {
   importJwk,
 } from "@fedify/fedify";
 import { DenoKvMessageQueue, DenoKvStore } from "@fedify/denokv";
-import type { Context, InboxContext } from "@fedify/fedify";
+import type { Context, FederationOptions, InboxContext } from "@fedify/fedify";
 import {
   Accept,
   Create,
@@ -169,10 +169,14 @@ export async function handleUndo(
   await kv.delete(followerKey(undo.actorId.href));
 }
 
-export function createFederationInstance(kv: Deno.Kv) {
+export function createFederationInstance(
+  kv: Deno.Kv,
+  origin?: FederationOptions<void>["origin"],
+) {
   const federation = createFederation<void>({
     kv: new DenoKvStore(kv),
     queue: new DenoKvMessageQueue(kv),
+    origin,
   });
 
   federation
